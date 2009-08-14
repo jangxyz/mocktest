@@ -23,13 +23,13 @@ def raw_mock(name = None, **kwargs):
 class SilentMock(RealSetter, SingletonClass):
 	def __init__(self, **kwargs):
 		self._real_set(_mock_dict = {
-					'action': None,
+					'_actions': None,
 					'return_value':DEFAULT,
 					'name':'unnamed mock',
 					'_children':{},
 					'_modifiable_children':True,
 					'_return_value_provided':False,
-					'should_intercept':True,
+					'_should_intercept':True,
 					'_proxied': None,
 				})
 		self._mock_reset()
@@ -46,77 +46,35 @@ class SilentMock(RealSetter, SingletonClass):
 		for attr, val in kwargs.items():
 			if not attr in self._mock_dict:
 				raise KeyError, "no such mock attribute: %s" % (attr,)
-			self._mock_assert_can_set(attr, val)
 			self._mock_dict[attr] = val
-			hookname = '_mock_set_%s_hook' % (attr,)
-			try:
-				self._real_get(hookname)(val)
-			except AttributeError: pass
 	
-	def _mock_has_a_result_set(self):
-		if self._mock_get('action', default=None) is not None:
-			return 'action'
-		elif self._mock_get('return_value', default=DEFAULT) is not DEFAULT:
-			return 'return_value'
-	
-	def _mock_assert_can_set(self, attr, val):
-		result_set = self._mock_has_a_result_set()
-		if attr in ['action', 'return_value'] and result_set is not None:
-			raise MockError("Cannot set %s on mock %r: %s has already been set" % (
-				attr.replace('_',' '),
-				self._mock_get('name'),
-				"a return value" if result_set == 'return_value' else 'an action'))
-
 	def _mock_get(self, attr, **kwargs):
 		if 'default' in kwargs:
 			return self._mock_dict.get(attr, kwargs['default'])
 		return self._mock_dict[attr]
 	
-	def _mock_del(self, attr):
-		hookname = '_mock_del_%s_hook' % (attr,)
-		try:
-			self._real_get(hookname)()
-		except AttributeError: pass
-	
-	# hooks on mock attributes
-	def _mock_set_return_value_hook(self, val):
-		self._mock_set(_return_value_provided=True)
-	
-	def _mock_del_return_value_hook(self):
-		self._mock_dict['return_value'] = DEFAULT
-		self._mock_dict['_return_value_provided'] = False
-		
-	def _mock_del_action_hook(self):
-		self._mock_dict['action'] = None
-		
-	def _mock_should_intercept(self, *args, **kwargs):
-		should_intercept = self._mock_get('should_intercept')
-		if isinstance(should_intercept, bool):
-			return should_intercept
-		try:
-			return should_intercept(*args, **kwargs)
-		except TypeError:
-			return False
-	
 	def __call__(self, *args, **kwargs):
-		if not self._mock_should_intercept(*args, **kwargs):
-			# call the real (proxied) object
-			return self._mock_get('_proxied')(*args, **kwargs)
-		self._mock_get('call_list').append(CallRecord(args, kwargs))
-		retval_done = False
-		if self._mock_get('action') is not None:
-			side_effect_ret_val = self._mock_get('action')(*args, **kwargs)
-			if not self._mock_get('_return_value_provided'):
-				retval = side_effect_ret_val
-				retval_done = True
-
-		if not retval_done:
-			retval = self._mock_get('return_value')
+		retval = None
+		acted = [True] # this is an array so we can mutate it in lieu of "nonlocal"
+		try:
+			def do_proxy(*a, **k):
+				proxy = self._mock_get('_proxied')
+				if proxy is None:
+					# the default action is to return a new anonymous silent mock
+					proxy = lambda *a, **k: self._mock_get('return_value')
+				else:
+					# this is the only branch where we're *NOT* counting ourselves as called
+					acted[0] = False
+				return proxy(*a, **k)
+			retval = act.act_upon(self._mock_get('_actions'), proxy, *args, **kwargs)
+		finally:
+			if acted[0]:
+				self._mock_get('call_list').append(CallRecord(args, kwargs))
 
 		if retval is DEFAULT:
-			self._mock_set(return_value = raw_mock(name="return value for (%s)" % (self._mock_get('name'))))
-			retval = self._mock_get('return_value')
-
+			retval = raw_mock(name="return value for (%s)" % (self._mock_get('name')))
+			# note this so that future calls get the same result
+			self._mock_set(return_value = retval)
 		return retval
 
 	def _mock_fail_if_no_child_allowed(self, name):
@@ -136,6 +94,12 @@ class SilentMock(RealSetter, SingletonClass):
 		self._mock_get('_children')[attr] = val
 
 	def _mock_get_child(self, name, force=False):
+		"""
+		called by e.g silentmock.child_name
+		if "child_name" is not in _mock_dict,
+		it will be added and set to a new silent mock
+		if (and only if) this mock is not frozen
+		"""
 		def _new():
 			self._mock_get('_children')[name] = raw_mock(name=name)
 			return self._mock_get('_children')[name]

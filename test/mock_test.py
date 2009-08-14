@@ -47,6 +47,29 @@ class MockObjectAndWrapperTest(TestCase):
 		self.assertEquals(None, wrapper.return_value)
 		self.assertEquals(None, wrapper.raw())
 	
+	def test_multiple_return_values_based_on_input(self):
+		wrapper = mock()
+		wrapper.returning(1)
+		wrapper.returning(2, when_=lambda a: a == 2)
+		self.assertEquals(wrapper.mock(1), 1)
+		self.assertEquals(wrapper.mock(2), 2)
+
+	def test_most_recent_return_takes_effect(self):
+		wrapper = mock()
+		wrapper.returning(1)
+		wrapper.returning(2)
+		self.assertEquals(wrapper.mock(), 2)
+	
+	def test_conditional_answers_are_ignored_when_arguments_arent_supported(self):
+		wrapper = mock()
+		wrapper.returning(False)
+		wrapper.returning(2, when_=lambda a,b,c=True: True) # must have 2 args, can have 3
+		self.assertEquals(wrapper.mock(1, 2), True)
+		self.assertEquals(wrapper.mock(1, 2, 3), True)
+		self.assertEquals(wrapper.mock(1, 2, c=3), True)
+		self.assertEquals(wrapper.mock(1, 2, d=3), False)
+		self.assertEquals(wrapper.mock(), False)
+	
 	def assert_mock_is_frozen(self, wrapper):
 		self.assertFalse(wrapper._modifiable_children)
 		self.assertRaises(AttributeError, lambda: wrapper.raw.nonexistant_child)
